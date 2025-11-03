@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect, FormEvent } from 'react';
-import type { FC } from 'react';
+import { useState, useRef, useEffect } from 'react';
+import type { FC, FormEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import './App.css';
@@ -15,7 +15,8 @@ const BlinkingCursor: FC = () => <span className="blinking-cursor">|</span>;
 
 const StoryResult: FC<{ content: string }> = ({ content }) => {
   try {
-    const data = JSON.parse(content);
+    const jsonString = content.replace(/^```json\s*|\s*```$/g, '');
+    const data = JSON.parse(jsonString);
     return (
       <div className="story-result">
         <h3>News Report</h3>
@@ -78,15 +79,10 @@ function App() {
     const eventSource = createChatStream(prompt);
     eventSourceRef.current = eventSource;
 
-    // Use a local variable to accumulate the full response.
     let responseAccumulator = '';
 
     eventSource.onmessage = (event) => {
-      // Append every piece of data received to the accumulator.
       responseAccumulator += event.data + '\n';
-      
-      // Update the UI in real-time for the typewriter effect.
-      // This is now safe because we are always setting the text to the *entire* accumulated string.
       setMessages(prev => {
         const newMessages = [...prev];
         const botMessage = newMessages.find(m => m.id === botMessageId);
@@ -103,16 +99,12 @@ function App() {
       eventSource.close();
       eventSourceRef.current = null;
       
-      // Perform one final update to ensure the complete message is set,
-      // just in case the last onmessage event didn't finish before the error.
       setMessages(prev => {
         const newMessages = [...prev];
         const botMessage = newMessages.find(m => m.id === botMessageId);
-        if (botMessage && botMessage.text === '') {
-            // If we received nothing, show an error.
+        if (botMessage && botMessage.text.trim() === '') {
             botMessage.text = "Sorry, there was an issue receiving the response.";
         } else if (botMessage) {
-            // Otherwise, ensure the final accumulated text is set.
             botMessage.text = responseAccumulator;
         }
         return newMessages;
@@ -123,15 +115,7 @@ function App() {
   const renderBotMessage = (message: Message) => {
     const content = message.text.trim();
     if (content.startsWith('```json')) {
-        const jsonString = content.replace(/^```json\s*|\s*```$/g, '');
-        try {
-            const parsedJson = JSON.parse(jsonString);
-            if (parsedJson.report) {
-                return <StoryResult content={jsonString} />;
-            }
-        } catch (e) {
-            console.error("Failed to parse story JSON", e);
-        }
+        return <StoryResult content={content} />;
     }
     return <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>;
   };
@@ -149,7 +133,7 @@ function App() {
             ) : (
               renderBotMessage(msg)
             )}
-            {isLoading && msg.sender === 'bot' && index === messages.length - 1 && <BlinkingCursor />}
+            {isLoading && index === messages.length - 1 && <BlinkingCursor />}
           </div>
         ))}
       </div>
