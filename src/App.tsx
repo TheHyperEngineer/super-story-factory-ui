@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect } from 'react';
-import type { FormEvent } from 'react'; // Use 'type' for type-only imports
+import { useState, useRef, useEffect, FormEvent } from 'react';
+import type { FC } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import './App.css';
@@ -11,25 +11,30 @@ interface Message {
   sender: 'user' | 'bot';
 }
 
-const BlinkingCursor = () => <span className="blinking-cursor">|</span>;
+const BlinkingCursor: FC = () => <span className="blinking-cursor">|</span>;
 
-const StoryResult = ({ data }: { data: any }) => {
-  return (
-    <div className="story-result">
-      <h3>News Report</h3>
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{data.report || ""}</ReactMarkdown>
-      <hr />
-      <h4>Tweets</h4>
-      <ul>
-        {(data.tweets || []).map((tweet: string, index: number) => (
-          <li key={index}>{tweet}</li>
-        ))}
-      </ul>
-      <hr />
-      <h4>Hashtags</h4>
-      <p>{(data.hashtags || []).join(' ')}</p>
-    </div>
-  );
+const StoryResult: FC<{ content: string }> = ({ content }) => {
+  try {
+    const data = JSON.parse(content);
+    return (
+      <div className="story-result">
+        <h3>News Report</h3>
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{data.report || "No report available."}</ReactMarkdown>
+        <hr />
+        <h4>Tweets</h4>
+        <ul>
+          {(data.tweets || []).map((tweet: string, index: number) => (
+            <li key={index}>{tweet}</li>
+          ))}
+        </ul>
+        <hr />
+        <h4>Hashtags</h4>
+        <p>{(data.hashtags || []).join(' ')}</p>
+      </div>
+    );
+  } catch (e) {
+    return <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>;
+  }
 };
 
 function App() {
@@ -37,7 +42,7 @@ function App() {
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const chatWindowRef = useRef<HTMLDivElement>(null);
-  const currentEventSource = useRef<EventSource | null>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
     if (chatWindowRef.current) {
@@ -49,8 +54,8 @@ function App() {
     e.preventDefault();
     if (!inputValue.trim() || isLoading) return;
 
-    if (currentEventSource.current) {
-      currentEventSource.current.close();
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
     }
 
     const userMessage: Message = {
@@ -59,11 +64,11 @@ function App() {
       sender: 'user',
     };
 
-    const botMessagePlaceholderId = Date.now() + 1;
+    const botMessageId = Date.now() + 1;
     setMessages(prev => [
       ...prev,
       userMessage,
-      { id: botMessagePlaceholderId, text: '', sender: 'bot' }
+      { id: botMessageId, text: '', sender: 'bot' }
     ]);
 
     setIsLoading(true);
@@ -71,57 +76,62 @@ function App() {
     setInputValue('');
 
     const eventSource = createChatStream(prompt);
-    currentEventSource.current = eventSource;
+    eventSourceRef.current = eventSource;
 
-    let fullResponse = '';
-
-    eventSource.onopen = () => {
-      console.log('Stream connection opened.');
-    };
+    // Use a local variable to accumulate the full response.
+    let responseAccumulator = '';
 
     eventSource.onmessage = (event) => {
-      fullResponse += event.data + '\n';
+      // Append every piece of data received to the accumulator.
+      responseAccumulator += event.data + '\n';
       
+      // Update the UI in real-time for the typewriter effect.
+      // This is now safe because we are always setting the text to the *entire* accumulated string.
       setMessages(prev => {
         const newMessages = [...prev];
-        const botMessage = newMessages.find(m => m.id === botMessagePlaceholderId);
+        const botMessage = newMessages.find(m => m.id === botMessageId);
         if (botMessage) {
-          botMessage.text = fullResponse;
+          botMessage.text = responseAccumulator;
         }
         return newMessages;
       });
     };
 
-    eventSource.onerror = () => {
-      console.log('Stream closed by server.');
+    eventSource.onerror = (err) => {
+      console.log('Stream closed by server or error occurred.', err);
+      setIsLoading(false);
+      eventSource.close();
+      eventSourceRef.current = null;
       
+      // Perform one final update to ensure the complete message is set,
+      // just in case the last onmessage event didn't finish before the error.
       setMessages(prev => {
         const newMessages = [...prev];
-        const botMessage = newMessages.find(m => m.id === botMessagePlaceholderId);
-        if (botMessage) {
-          botMessage.text = fullResponse;
+        const botMessage = newMessages.find(m => m.id === botMessageId);
+        if (botMessage && botMessage.text === '') {
+            // If we received nothing, show an error.
+            botMessage.text = "Sorry, there was an issue receiving the response.";
+        } else if (botMessage) {
+            // Otherwise, ensure the final accumulated text is set.
+            botMessage.text = responseAccumulator;
         }
         return newMessages;
       });
-
-      setIsLoading(false);
-      eventSource.close();
-      currentEventSource.current = null;
     };
   };
 
   const renderBotMessage = (message: Message) => {
     const content = message.text.trim();
-    try {
-      const jsonMatch = content.match(/```json\s*([\s\S]*?)\s*```/);
-      if (jsonMatch && jsonMatch[1]) {
-        const parsedJson = JSON.parse(jsonMatch[1]);
-        if (parsedJson.report && parsedJson.tweets) {
-          return <StoryResult data={parsedJson} />;
+    if (content.startsWith('```json')) {
+        const jsonString = content.replace(/^```json\s*|\s*```$/g, '');
+        try {
+            const parsedJson = JSON.parse(jsonString);
+            if (parsedJson.report) {
+                return <StoryResult content={jsonString} />;
+            }
+        } catch (e) {
+            console.error("Failed to parse story JSON", e);
         }
-      }
-    } catch (e) {
-      // Not JSON, fall through
     }
     return <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>;
   };
